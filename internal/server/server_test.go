@@ -234,11 +234,14 @@ func TestProfilesCRUD(t *testing.T) {
 // --- start/stop/stats ---
 
 func TestStartStopStats(t *testing.T) {
-	// mock 上游 API
+	// mock 上游 API；blocked 閘門讓請求懸掛，保證「重複 start 應 409」檢查時任務必然執行中
+	// （避免 CI 快機上任務秒完成造成的競態 flake），檢查完 close 釋放讓任務跑完。
 	var hits int64
+	blocked := make(chan struct{})
 	upMux := http.NewServeMux()
 	upMux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		hits++
+		<-blocked
 		io.WriteString(w, `{"usage":{"prompt_tokens":100,"completion_tokens":200}}`)
 	})
 	up := httptest.NewServer(upMux)
@@ -260,19 +263,22 @@ func TestStartStopStats(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// start → stats 應出現且 Running（或已秒完成；輪詢等待完成）
+	// start → 200；請求懸掛中，任務必然 Running
 	resp = authReq(t, "POST", ts.URL+"/api/profiles/p1/start", tok, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("start 應 200，得到 %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	// 重複 start → 409
+	// 重複 start → 409（此時 worker 全部阻塞在 blocked，任務不可能已結束）
 	resp = authReq(t, "POST", ts.URL+"/api/profiles/p1/start", tok, nil)
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("執行中重複 start 應 409，得到 %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+
+	// 釋放閘門，讓任務完成
+	close(blocked)
 
 	// 等待完成
 	deadline := time.Now().Add(10 * time.Second)
