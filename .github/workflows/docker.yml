@@ -93,7 +93,7 @@ jobs:
 
           [ "$(docker inspect td --format '{{.Config.User}}')" = "nonroot:nonroot" ]
           [ -f cfg/config.json ]
-          grep -q '"proxyUrl"' cfg/config.json
+          sudo grep -q '"proxyUrl"' cfg/config.json
 
           docker rm -f td
 
