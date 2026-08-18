@@ -9,6 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      - name: Shellcheck install.sh
+        run: shellcheck -S warning install.sh
+
   test:
     runs-on: ubuntu-latest
     steps:

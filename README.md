@@ -32,6 +32,22 @@
 
 ## 快速開始
 
+### VPS 一鍵安裝（Ubuntu/Debian，全自動）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main/install.sh | sudo bash
+
+# 自訂埠：
+curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main/install.sh | sudo bash -s - -p 8080
+
+# 完整移除：
+curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main/install.sh | sudo bash -s - --uninstall
+```
+
+腳本會：從 Release 下載預建執行檔（失敗自動備援原始碼編譯）→ 註冊 systemd 服務（開機自啟、當機自動重啟）→ 建立專用系統使用者與 `/etc/token-devastator/config.json`（重複執行＝升級，既有設定保留）。安裝完成即可打開 `http://<VPS IP>:24300`。
+
+### 手動執行
+
 ```bash
 # 從原始碼建置（需 Go 1.26+）
 go build -o token-devastator ./cmd/token-devastator
@@ -118,6 +134,22 @@ Single Go binary with a built-in web panel, supporting OpenAI (both new and lega
 - **Persistence**: everything saved to `config.json`
 
 ## Quick Start
+
+### One-line VPS install (Ubuntu/Debian, fully automated)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main/install.sh | sudo bash
+
+# Custom port:
+curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main/install.sh | sudo bash -s - -p 8080
+
+# Full uninstall:
+curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main/install.sh | sudo bash -s - --uninstall
+```
+
+The script downloads the prebuilt binary from Releases (falls back to building from source), registers a systemd service (auto-start on boot, auto-restart on crash), and creates a dedicated system user plus `/etc/token-devastator/config.json` (re-running upgrades in place; existing settings are preserved). The panel is then at `http://<VPS IP>:24300`.
+
+### Manual
 
 ```bash
 # Build from source (Go 1.26+)

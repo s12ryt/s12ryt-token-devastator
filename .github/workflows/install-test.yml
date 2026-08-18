@@ -1,0 +1,88 @@
+name: Install Test
+
+# 在乾淨的 ubuntu runner 上實跑 install.sh，端到端驗證：
+# 安裝（Release 下載）→ 服務 active → HTTP 200 → 登入 API → 冪等升級 → 完整移除
+# 需要 Release 已有資產（推過 tag）後以手動方式觸發。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install
+        run: sudo bash install.sh -p 24300
+
+      - name: Service is active
+        run: systemctl is-active token-devastator
+
+      - name: Panel HTTP 200
+        run: curl -fsS http://127.0.0.1:24300/ | grep -q "token"
+
+      - name: Static assets served
+        run: |
+          curl -fsS http://127.0.0.1:24300/app.js >/dev/null
+          curl -fsS http://127.0.0.1:24300/style.css >/dev/null
+
+      - name: Login API works (default password)
+        run: |
+          set -e
+          resp="$(curl -fsS -X POST http://127.0.0.1:24300/api/login \
+            -H 'Content-Type: application/json' -d '{"password":"admin"}')"
+          echo "${resp}" | grep -q '"token"'
+          echo "${resp}" | grep -q '"isDefault":true'
+
+      - name: Unauthenticated request is 401
+        run: |
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:24300/api/profiles)"
+          [ "${code}" = "401" ]
+
+      - name: Re-run install (idempotent upgrade path)
+        run: sudo bash install.sh -p 24300
+
+      - name: Service still active after upgrade
+        run: systemctl is-active token-devastator
+
+      - name: Uninstall
+        run: sudo bash install.sh --uninstall
+
+      - name: Service and files are gone
+        run: |
+          [ ! -e /usr/local/bin/token-devastator ]
+          [ ! -e /etc/systemd/system/token-devastator.service ]
+          [ ! -d /etc/token-devastator ]
+          if systemctl is-active --quiet token-devastator 2>/dev/null; then
+            echo "service still active"; exit 1
+          fi
+
+  install-from-source:
+    # 驗證源碼備援路徑：模擬 Release 下載失敗（改用不存在的 tag 直鏈強制 fallback）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch download URL to force source build fallback
+        run: |
+          sed -i 's|releases/latest/download|releases/tags/nonexistent-fallback-test/download|' install.sh
+          grep -q "nonexistent-fallback-test" install.sh
+
+      - name: Install via source build fallback
+        run: |
+          # 預先安裝 Go，跳過 Go 下載步驟以加速（仍驗證編譯路徑）
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq golang-go
+          sudo env PATH="/usr/lib/go/bin:${PATH}" bash install.sh -p 24301
+
+      - name: Service is active
+        run: systemctl is-active token-devastator
+
+      - name: Panel HTTP 200
+        run: curl -fsS http://127.0.0.1:24301/ | grep -q "token"
+
+      - name: Uninstall
+        run: sudo bash install.sh --uninstall
