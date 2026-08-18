@@ -12,6 +12,7 @@ permissions:
 jobs:
   install:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -62,7 +63,9 @@ jobs:
 
   install-from-source:
     # 驗證源碼備援路徑：模擬 Release 下載失敗（改用不存在的 tag 直鏈強制 fallback）
+    # 不預裝 Go：讓腳本走真實路徑（下載官方 Go 1.26.3 → 編譯）
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -72,11 +75,7 @@ jobs:
           grep -q "nonexistent-fallback-test" install.sh
 
       - name: Install via source build fallback
-        run: |
-          # 預先安裝 Go，跳過 Go 下載步驟以加速（仍驗證編譯路徑）
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq golang-go
-          sudo env PATH="/usr/lib/go/bin:${PATH}" bash install.sh -p 24301
+        run: sudo bash install.sh -p 24301
 
       - name: Service is active
         run: systemctl is-active token-devastator

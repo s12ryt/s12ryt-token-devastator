@@ -80,16 +80,21 @@ uninstall() {
 # 安裝模式
 # =============================================================================
 install_deps() {
+  # curl 與 CA 憑證多數發行版預先就有；缺了才動 apt（避免與背景 apt 維護搶鎖）
+  if command -v curl >/dev/null 2>&1 && [ -d /etc/ssl/certs ]; then
+    return 0
+  fi
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq curl ca-certificates >/dev/null
+  apt-get -o DPkg::Lock::Timeout=120 update -qq
+  apt-get -o DPkg::Lock::Timeout=120 install -y -qq curl ca-certificates >/dev/null
 }
 
 # 從 GitHub Release 下載預建執行檔
 try_release() {
   local url="${REPO_URL}/releases/latest/download/token-devastator-linux-${ARCH}.tar.gz"
   log "從 Release 下載預建執行檔（linux/${ARCH}）…"
-  if ! curl -fsSL --retry 3 --retry-delay 2 -o "${TMP_DIR}/pkg.tar.gz" "${url}"; then
+  if ! curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 120 \
+      -o "${TMP_DIR}/pkg.tar.gz" "${url}"; then
     return 1
   fi
   tar -xzf "${TMP_DIR}/pkg.tar.gz" -C "${TMP_DIR}"
@@ -102,14 +107,14 @@ build_from_source() {
   warn "Release 下載失敗，備援：原始碼編譯模式。"
   if ! command -v go >/dev/null 2>&1 && [[ ! -x /usr/local/go/bin/go ]]; then
     log "下載 Go ${GO_VERSION}（linux/${ARCH}）…"
-    curl -fsSL --retry 3 -o "${TMP_DIR}/go.tar.gz" \
+    curl -fsSL --retry 3 --connect-timeout 10 --max-time 600 -o "${TMP_DIR}/go.tar.gz" \
       "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz"
     rm -rf /usr/local/go
     tar -C /usr/local -xzf "${TMP_DIR}/go.tar.gz"
   fi
   export PATH="/usr/local/go/bin:${PATH}"
   log "下載原始碼並編譯…"
-  curl -fsSL --retry 3 -o "${TMP_DIR}/src.tar.gz" \
+  curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 -o "${TMP_DIR}/src.tar.gz" \
     "https://github.com/${REPO}/archive/refs/heads/main.tar.gz"
   tar -xzf "${TMP_DIR}/src.tar.gz" -C "${TMP_DIR}"
   ( cd "${TMP_DIR}/${REPO#*/}-main" && go build -trimpath -o "${TMP_DIR}/token-devastator" ./cmd/token-devastator )
@@ -135,8 +140,7 @@ write_unit() {
   cat > "${UNIT_FILE}" <<EOF
 [Unit]
 Description=token-devastator (token burner web panel)
-After=network-online.target
-Wants=network-online.target
+After=network.target
 
 [Service]
 Type=simple
