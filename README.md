@@ -46,6 +46,8 @@ curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main
 
 腳本會：從 Release 下載預建執行檔（失敗自動備援原始碼編譯）→ 註冊 systemd 服務（開機自啟、當機自動重啟）→ 建立專用系統使用者與 `/etc/token-devastator/config.json`（重複執行＝升級，既有設定保留）。安裝完成即可打開 `http://<VPS IP>:24300`。
 
+> **疑難排解**：若 VPS 對 `/usr/local/bin` 掛載 `noexec`（常見於容器型 VPS，症狀為 systemd `203/EXEC Permission denied`），腳本會自動偵測並改安裝至 `/opt/token-devastator/bin`；也可用環境變數 `TD_BIN_CANDIDATES=/路徑1:/路徑2` 自訂候選位置。可用 `findmnt -T /usr/local/bin -no OPTIONS` 查看掛載選項。
+
 ### Docker（ghcr.io 多架構映像）
 
 ```bash
@@ -159,6 +161,8 @@ curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main
 ```
 
 The script downloads the prebuilt binary from Releases (falls back to building from source), registers a systemd service (auto-start on boot, auto-restart on crash), and creates a dedicated system user plus `/etc/token-devastator/config.json` (re-running upgrades in place; existing settings are preserved). The panel is then at `http://<VPS IP>:24300`.
+
+> **Troubleshooting**: if your VPS mounts `/usr/local/bin` with `noexec` (common on container-based VPS; symptom: systemd `203/EXEC Permission denied`), the script detects it and automatically installs to `/opt/token-devastator/bin` instead. Override candidate paths with `TD_BIN_CANDIDATES=/path1:/path2`. Check mount options with `findmnt -T /usr/local/bin -no OPTIONS`.
 
 ### Docker (multi-arch image on ghcr.io)
 

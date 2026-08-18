@@ -16,6 +16,10 @@ set -euo pipefail
 REPO="s12ryt/s12ryt-token-devastator"
 REPO_URL="https://github.com/${REPO}"
 BIN_PATH="/usr/local/bin/token-devastator"
+# 候選安裝位置：部分容器型 VPS 對 /usr/local/bin 掛 noexec（execve 回 EACCES，
+# systemd 報 203/EXEC Permission denied），安裝後逐一實測 exec，失敗自動換下一個。
+# 可用環境變數 TD_BIN_CANDIDATES 覆蓋（冒號分隔）。
+BIN_CANDIDATES="${TD_BIN_CANDIDATES:-/usr/local/bin/token-devastator:/opt/token-devastator/bin/token-devastator:/usr/bin/token-devastator}"
 CONF_DIR="/etc/token-devastator"
 CONF_FILE="${CONF_DIR}/config.json"
 UNIT_FILE="/etc/systemd/system/token-devastator.service"
@@ -68,7 +72,12 @@ uninstall() {
   systemctl disable --now "${SERVICE}" >/dev/null 2>&1 || true
   rm -f "${UNIT_FILE}"
   systemctl daemon-reload
-  rm -f "${BIN_PATH}"
+  # 清除所有候選位置的執行檔（可能裝在備援位置）
+  IFS=':' read -ra _cands <<< "${BIN_CANDIDATES}"
+  for p in "${_cands[@]}"; do
+    rm -f "${p}"
+  done
+  rm -rf /opt/token-devastator
   rm -rf "${CONF_DIR}"
   if id -u "${USER_NAME}" >/dev/null 2>&1; then
     userdel "${USER_NAME}" >/dev/null 2>&1 || true
@@ -167,6 +176,31 @@ ensure_user() {
   fi
 }
 
+# 逐一嘗試候選位置：安裝後實際執行一次（-h，退出碼 0）；
+# exec 失敗（noexec 掛載／LSM 限制）就換下一個候選。
+install_bin() {
+  local p opts
+  IFS=':' read -ra _cands <<< "${BIN_CANDIDATES}"
+  for p in "${_cands[@]}"; do
+    mkdir -p "$(dirname "${p}")" 2>/dev/null || true
+    if ! install -m 0755 "${TMP_DIR}/token-devastator" "${p}" 2>/dev/null; then
+      warn "無法寫入 ${p}，嘗試下一個安裝位置…"
+      continue
+    fi
+    if "${p}" -h >/dev/null 2>&1; then
+      if [ "${p}" != "/usr/local/bin/token-devastator" ]; then
+        warn "已安裝至備援位置 ${p}"
+      fi
+      BIN_PATH="${p}"
+      return 0
+    fi
+    opts="$(findmnt -T "${p}" -no OPTIONS 2>/dev/null || true)"
+    warn "無法執行 ${p}（掛載選項：${opts:-未知}；可能為 noexec 或 SELinux/AppArmor 限制），嘗試下一個安裝位置…"
+    rm -f "${p}"
+  done
+  return 1
+}
+
 main_install() {
   install_deps
 
@@ -181,21 +215,17 @@ main_install() {
   chmod 750 "${CONF_DIR}"
   chmod 640 "${CONF_FILE}"
 
-  local was_running=0
-  if systemctl is-active --quiet "${SERVICE}"; then
-    was_running=1
-    log "偵測到既有服務，先停止以升級…"
-    systemctl stop "${SERVICE}"
-  elif systemctl list-unit-files "${SERVICE}.service" 2>/dev/null | grep -q "${SERVICE}"; then
-    : # 已安裝但未運行（升級路徑）
-  fi
+  # 停止既有服務（含失敗重啟循環），避免換檔與自動重啟互搶
+  log "停止既有服務（若存在）…"
+  systemctl stop "${SERVICE}" >/dev/null 2>&1 || true
+  systemctl reset-failed "${SERVICE}" >/dev/null 2>&1 || true
 
-  install -m 0755 "${TMP_DIR}/token-devastator" "${BIN_PATH}"
+  install_bin || die "所有候選位置皆無法執行程式（候選：${BIN_CANDIDATES}）。可用 TD_BIN_CANDIDATES=/其他/路徑/token-devastator 指定位置後重試。"
+
   write_unit
   systemctl daemon-reload
   systemctl enable "${SERVICE}" >/dev/null 2>&1
   systemctl start "${SERVICE}"
-  [[ ${was_running} -eq 1 ]] || true # stop 過必 start；未運行過也 start（首次安裝）
 
   # 健康檢查（最多 15 秒）
   log "等待服務就緒…"

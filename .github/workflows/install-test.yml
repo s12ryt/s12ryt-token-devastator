@@ -61,6 +61,41 @@ jobs:
             echo "service still active"; exit 1
           fi
 
+  # 模擬容器型 VPS 對 /usr/local/bin 掛 noexec（203/EXEC Permission denied 故障模式）：
+  # 腳本應 exec 自檢失敗後自動改裝 /opt/token-devastator/bin
+  install-noexec-fallback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mount noexec tmpfs over /usr/local/bin and install
+        run: |
+          sudo mount -t tmpfs -o noexec tmpfs /usr/local/bin
+          sudo bash install.sh -p 24300
+
+      - name: Service is active via fallback path
+        run: systemctl is-active token-devastator
+
+      - name: Panel HTTP 200
+        run: curl -fsS http://127.0.0.1:24300/ | grep -q "token"
+
+      - name: Binary landed on fallback location
+        run: |
+          [ ! -e /usr/local/bin/token-devastator ]
+          [ -x /opt/token-devastator/bin/token-devastator ]
+          grep -q 'ExecStart=/opt/token-devastator/bin/token-devastator' /etc/systemd/system/token-devastator.service
+
+      - name: Uninstall cleans all candidate locations
+        run: |
+          sudo bash install.sh --uninstall
+          [ ! -e /opt/token-devastator/bin/token-devastator ]
+          [ ! -d /etc/token-devastator ]
+
+      - name: Unmount
+        if: always()
+        run: sudo umount /usr/local/bin || true
+
   install-from-source:
     # 驗證源碼備援路徑：模擬 Release 下載失敗（改用不存在的 tag 直鏈強制 fallback）
     # 不預裝 Go：讓腳本走真實路徑（下載官方 Go 1.26.3 → 編譯）
