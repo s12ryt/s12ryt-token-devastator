@@ -20,7 +20,8 @@ jobs:
           curl -fsSL --retry 3 -o /tmp/shellcheck.tar.xz \
             "https://github.com/koalaman/shellcheck/releases/download/${scver}/shellcheck-${scver}.linux.x86_64.tar.xz"
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-          sudo install -m 0755 "/tmp/shellcheck-${scver#v}/shellcheck" /usr/local/bin/shellcheck
+          sudo install -m 0755 "/tmp/shellcheck-${scver}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
 
       - name: Shellcheck install.sh
         run: shellcheck -S warning install.sh
