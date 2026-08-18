@@ -1,0 +1,18 @@
+# 本地運行數據（含 API key 與密碼雜湊，切勿提交）
+config.json
+
+# 內部工作紀錄（不隨開源發布）
+agent/
+todos.md
+
+# 建置產物與測試殘留
+*.exe
+*.exe~
+dist/
+.playwright-mcp/
+*.png
+
+# IDE / 編輯器
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>token毀滅者</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- 登入視圖 -->
+  <div id="login-view" class="login-wrap" hidden>
+    <form id="login-form" class="card login-card">
+      <h1 class="brand"><span class="fire">🔥</span> token毀滅者</h1>
+      <p class="muted">把用不完的 API token 燒成灰燼</p>
+      <label for="login-password">密碼</label>
+      <input type="password" id="login-password" autocomplete="current-password" required>
+      <button type="submit" class="btn primary">登入</button>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </div>
+
+  <!-- 主視圖 -->
+  <div id="main-view" hidden>
+    <header class="topbar">
+      <h1 class="brand"><span class="fire">🔥</span> token毀滅者</h1>
+      <div class="topbar-actions">
+        <button id="btn-change-password" class="btn ghost">更改密碼</button>
+        <button id="btn-logout" class="btn ghost">登出</button>
+      </div>
+    </header>
+
+    <main class="container">
+      <!-- 全域設定 -->
+      <section class="card">
+        <h2>全域代理設定</h2>
+        <div class="row">
+          <input type="text" id="global-proxy" placeholder="http://user:pass@host:port 或 socks5://host:port；none=全部直連；留空=不使用代理">
+          <button id="btn-save-proxy" class="btn primary">儲存</button>
+        </div>
+        <p class="muted small">支援 http / https / socks5 / socks5h，可內嵌帳密 <code>user:pass@host:port</code>。個別 profile 可覆蓋此設定。</p>
+        <p id="proxy-msg" class="muted small" hidden></p>
+      </section>
+
+      <!-- Profile 列表 -->
+      <section>
+        <div class="section-head">
+          <h2>燒毀任務</h2>
+          <button id="btn-new-profile" class="btn primary">＋ 新增 profile</button>
+        </div>
+        <div id="profile-list" class="profile-grid"></div>
+        <p id="empty-hint" class="muted" hidden>還沒有任何 profile，點上方「新增 profile」開始燒 token。</p>
+      </section>
+    </main>
+  </div>
+
+  <!-- 更改密碼對話框 -->
+  <dialog id="dlg-password" class="dlg">
+    <form id="form-password" class="card">
+      <h2>更改密碼</h2>
+      <label for="pw-old">舊密碼</label>
+      <input type="password" id="pw-old" autocomplete="current-password" required>
+      <label for="pw-new">新密碼（至少 4 個字元）</label>
+      <input type="password" id="pw-new" autocomplete="new-password" minlength="4" required>
+      <label for="pw-confirm">確認新密碼</label>
+      <input type="password" id="pw-confirm" autocomplete="new-password" required>
+      <div class="dlg-actions">
+        <button type="button" class="btn ghost" data-close>取消</button>
+        <button type="submit" class="btn primary">確認更改</button>
+      </div>
+      <p id="pw-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <!-- Profile 編輯對話框 -->
+  <dialog id="dlg-profile" class="dlg">
+    <form id="form-profile" class="card">
+      <h2 id="profile-dlg-title">新增 profile</h2>
+      <div class="grid-2">
+        <div>
+          <label for="f-id">ID（英文識別碼）</label>
+          <input type="text" id="f-id" pattern="[A-Za-z0-9_-]+" required>
+        </div>
+        <div>
+          <label for="f-name">名稱</label>
+          <input type="text" id="f-name" required>
+        </div>
+        <div>
+          <label for="f-protocol">協議</label>
+          <select id="f-protocol">
+            <option value="openai-chat">OpenAI Chat Completions（/v1/chat/completions）</option>
+            <option value="openai-responses">OpenAI Responses（/v1/responses）</option>
+            <option value="claude">Claude（/v1/messages）</option>
+          </select>
+        </div>
+        <div>
+          <label for="f-model">模型</label>
+          <input type="text" id="f-model" placeholder="gpt-4o / claude-sonnet-4" required>
+        </div>
+        <div class="span-2">
+          <label for="f-apibase">API 地址</label>
+          <input type="text" id="f-apibase" placeholder="https://api.openai.com" required>
+        </div>
+        <div class="span-2">
+          <label for="f-apikey">API Key</label>
+          <input type="password" id="f-apikey" autocomplete="off" required>
+        </div>
+        <div>
+          <label for="f-context">上下文窗口</label>
+          <input type="text" id="f-context" placeholder="128K 或 131072" required>
+        </div>
+        <div>
+          <label for="f-maxout">單請求最大輸出 token</label>
+          <input type="number" id="f-maxout" min="1" required>
+        </div>
+        <div>
+          <label for="f-concurrency">並發數（1–1024）</label>
+          <input type="number" id="f-concurrency" min="1" max="1024" required>
+        </div>
+        <div>
+          <label for="f-rounds">輪次（≥1）</label>
+          <input type="number" id="f-rounds" min="1" required>
+        </div>
+        <div>
+          <label for="f-strategy">消耗策略</label>
+          <select id="f-strategy">
+            <option value="both">雙向燒（大輸入＋大輸出）</option>
+            <option value="output">只燒輸出（小輸入、大輸出）</option>
+            <option value="input">只燒輸入（大輸入、小輸出）</option>
+          </select>
+        </div>
+        <div>
+          <label for="f-proxy">代理覆蓋</label>
+          <input type="text" id="f-proxy" placeholder="留空=跟隨全域；none=直連；或指定代理 URL">
+        </div>
+      </div>
+      <div class="dlg-actions">
+        <button type="button" class="btn ghost" data-close>取消</button>
+        <button type="submit" class="btn primary">儲存</button>
+      </div>
+      <p id="profile-error" class="error" hidden></p>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>
