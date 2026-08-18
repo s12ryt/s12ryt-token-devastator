@@ -1,0 +1,106 @@
+name: Docker
+
+# 推 tag（v*）時建置多架構映像並推送 ghcr.io
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern=latest
+
+      - name: Build & push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 推送後拉回映像實跑驗證（每次發版自動冒煙測試）
+  smoke:
+    runs-on: ubuntu-latest
+    needs: build-push
+    timeout-minutes: 10
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run container and verify panel/API
+        run: |
+          set -euxo pipefail
+          img="ghcr.io/${{ github.repository }}:${{ needs.build-push.outputs.version }}"
+          mkdir -p cfg && sudo chown 65532:65532 cfg
+          docker run -d --name td -p 24300:24300 -v "$PWD/cfg":/etc/token-devastator "$img"
+
+          for i in $(seq 1 15); do
+            curl -fsS http://127.0.0.1:24300/ >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:24300/ | grep -q "token"
+
+          resp="$(curl -fsS -X POST http://127.0.0.1:24300/api/login \
+            -H 'Content-Type: application/json' -d '{"password":"admin"}')"
+          echo "$resp" | grep -q '"isDefault":true'
+          token="$(echo "$resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:24300/api/profiles)"
+          [ "$code" = "401" ]
+
+          # 保存設定（nonroot 對 volume 的可寫性＋持久化）
+          curl -fsS -X PUT http://127.0.0.1:24300/api/settings \
+            -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+            -d '{"proxyUrl":"none"}' | grep -q 'none'
+
+          [ "$(docker inspect td --format '{{.Config.User}}')" = "nonroot:nonroot" ]
+          [ -f cfg/config.json ]
+          grep -q '"proxyUrl"' cfg/config.json
+
+          docker rm -f td
+
+      - name: Verify multi-arch manifest
+        run: |
+          set -euxo pipefail
+          img="ghcr.io/${{ github.repository }}:${{ needs.build-push.outputs.version }}"
+          docker manifest inspect "$img" > manifest.json
+          grep -q '"architecture": "amd64"' manifest.json
+          grep -q '"architecture": "arm64"' manifest.json

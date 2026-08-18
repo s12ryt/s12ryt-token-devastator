@@ -46,6 +46,17 @@ curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main
 
 腳本會：從 Release 下載預建執行檔（失敗自動備援原始碼編譯）→ 註冊 systemd 服務（開機自啟、當機自動重啟）→ 建立專用系統使用者與 `/etc/token-devastator/config.json`（重複執行＝升級，既有設定保留）。安裝完成即可打開 `http://<VPS IP>:24300`。
 
+### Docker（ghcr.io 多架構映像）
+
+```bash
+docker run -d --name token-devastator \
+  -p 24300:24300 \
+  -v token-devastator-config:/etc/token-devastator \
+  ghcr.io/s12ryt/s12ryt-token-devastator:latest
+```
+
+映像為 linux/amd64＋linux/arm64 多架構，基底 distroless（內建 CA 憑證、非 root 執行）。設定檔掛載於 `/etc/token-devastator`（named volume 首次會自動以正確權限初始化；若掛載本機目錄請先 `chown 65532:65532`）。版本標籤：`latest`、`1.2`、`1.2.3` 對應 Release 版本。
+
 ### 手動執行
 
 ```bash
@@ -148,6 +159,17 @@ curl -fsSL https://raw.githubusercontent.com/s12ryt/s12ryt-token-devastator/main
 ```
 
 The script downloads the prebuilt binary from Releases (falls back to building from source), registers a systemd service (auto-start on boot, auto-restart on crash), and creates a dedicated system user plus `/etc/token-devastator/config.json` (re-running upgrades in place; existing settings are preserved). The panel is then at `http://<VPS IP>:24300`.
+
+### Docker (multi-arch image on ghcr.io)
+
+```bash
+docker run -d --name token-devastator \
+  -p 24300:24300 \
+  -v token-devastator-config:/etc/token-devastator \
+  ghcr.io/s12ryt/s12ryt-token-devastator:latest
+```
+
+The image is multi-arch (linux/amd64 + linux/arm64) on a distroless base (bundled CA certs, runs as non-root). Config is mounted at `/etc/token-devastator` (a named volume is initialized with correct permissions; for a bind-mounted host directory, `chown 65532:65532` it first). Tags: `latest`, `1.2`, `1.2.3` mirror the releases.
 
 ### Manual
 

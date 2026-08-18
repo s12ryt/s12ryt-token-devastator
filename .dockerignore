@@ -1,0 +1,13 @@
+# 本地運行數據與非建置所需檔案
+config.json
+agent/
+todos.md
+.git/
+.github/
+.playwright-mcp/
+*.exe
+*.png
+dist/
+install.sh
+README.md
+LICENSE
