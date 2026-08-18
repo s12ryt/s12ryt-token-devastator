@@ -96,6 +96,42 @@ jobs:
         if: always()
         run: sudo umount /usr/local/bin || true
 
+  # 模擬真實案例 VPS：root 可 exec、服務使用者被拒（目錄 0750）。
+  # 關鍵在自檢必須以「服務使用者」身分（經 /bin/sh 清 capabilities）進行，
+  # 腳本應拒絕 /usr/local/bin 並自動改裝 /opt。
+  install-restricted-dir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restrict /usr/local/bin (root-only traverse) and install
+        run: |
+          sudo chmod 0750 /usr/local/bin
+          sudo bash install.sh -p 24300
+          sudo chmod 0755 /usr/local/bin
+
+      - name: Service is active via fallback path
+        run: systemctl is-active token-devastator
+
+      - name: Binary landed on fallback location & unit points there
+        run: |
+          [ ! -e /usr/local/bin/token-devastator ]
+          [ -x /opt/token-devastator/bin/token-devastator ]
+          grep -q 'ExecStart=/opt/token-devastator/bin/token-devastator' /etc/systemd/system/token-devastator.service
+
+      - name: Panel HTTP 200 and login works
+        run: |
+          curl -fsS http://127.0.0.1:24300/ | grep -q "token"
+          curl -fsS -X POST http://127.0.0.1:24300/api/login \
+            -H 'Content-Type: application/json' -d '{"password":"admin"}' | grep -q '"isDefault":true'
+
+      - name: Uninstall cleans all candidate locations
+        run: |
+          sudo bash install.sh --uninstall
+          [ ! -e /opt/token-devastator/bin/token-devastator ]
+          [ ! -d /etc/token-devastator ]
+
   install-from-source:
     # 驗證源碼備援路徑：模擬 Release 下載失敗（改用不存在的 tag 直鏈強制 fallback）
     # 不預裝 Go：讓腳本走真實路徑（下載官方 Go 1.26.3 → 編譯）

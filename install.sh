@@ -145,7 +145,15 @@ EOF
 }
 
 write_unit() {
-  log "寫入 systemd 服務…"
+  local harden=""
+  if [ "${1:-}" != "compat" ]; then
+    harden="NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=${CONF_DIR}
+ProtectHome=true
+PrivateTmp=true"
+  fi
+  log "寫入 systemd 服務${1:+（相容模式）}…"
   cat > "${UNIT_FILE}" <<EOF
 [Unit]
 Description=token-devastator (token burner web panel)
@@ -158,11 +166,7 @@ Group=${USER_NAME}
 ExecStart=${BIN_PATH} -config ${CONF_FILE} -addr ${LISTEN_HOST}:${PORT}
 Restart=on-failure
 RestartSec=3
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=${CONF_DIR}
-ProtectHome=true
-PrivateTmp=true
+${harden}
 
 [Install]
 WantedBy=multi-user.target
@@ -176,32 +180,66 @@ ensure_user() {
   fi
 }
 
-# 逐一嘗試候選位置：安裝後實際執行一次（-h，退出碼 0）；
-# exec 失敗（noexec 掛載／LSM 限制）就換下一個候選。
-install_bin() {
-  local p opts
-  IFS=':' read -ra _cands <<< "${BIN_CANDIDATES}"
-  for p in "${_cands[@]}"; do
-    mkdir -p "$(dirname "${p}")" 2>/dev/null || true
-    if ! install -m 0755 "${TMP_DIR}/token-devastator" "${p}" 2>/dev/null; then
-      warn "無法寫入 ${p}，嘗試下一個安裝位置…"
-      continue
-    fi
-    if "${p}" -h >/dev/null 2>&1; then
-      if [ "${p}" != "/usr/local/bin/token-devastator" ]; then
-        warn "已安裝至備援位置 ${p}"
-      fi
-      BIN_PATH="${p}"
+# 以「服務使用者」身分實測執行（systemd 即以該 user 執行）。部分環境 root 可
+# 執行但服務使用者被拒（目錄 ACL／LSM／目錄權限），只有這層測得出來。
+# 重要：一律經 /bin/sh -c 包裹——直接 exec 在 setpriv 路徑下可能殘留有效
+# capabilities 而繞過目錄搜尋檢查，造成假通過（實測重現過）；sh 不帶 file caps，
+# exec 時 capabilities 會被清空，語義與 systemd 乾淨環境一致。
+exec_as_service_user() {
+  local p="$1"
+  if command -v su >/dev/null 2>&1; then
+    su -s /bin/sh -c "exec '${p}' -h" "${USER_NAME}" >/dev/null 2>&1
+  elif command -v setpriv >/dev/null 2>&1; then
+    setpriv --reuid="$(id -u "${USER_NAME}")" --regid="$(id -g "${USER_NAME}")" \
+      --clear-groups -- /bin/sh -c "exec '${p}' -h" >/dev/null 2>&1
+  else
+    "${p}" -h >/dev/null 2>&1
+  fi
+}
+
+# 列出路徑逐級權限，輔助排查目錄 ACL／LSM 問題
+path_diag() {
+  local d="$1" part="" s
+  case "${d}" in
+    /*) ;;
+    *) echo "  ${d}"; return ;;
+  esac
+  IFS='/' read -ra _segs <<< "${d}"
+  for s in "${_segs[@]}"; do
+    [ -z "${s}" ] && continue
+    part="${part}/${s}"
+    ls -ld "${part}" 2>/dev/null | sed 's/^/  /'
+  done
+}
+
+# 以「面板 HTTP 實際應答」驗證服務就緒——203/EXEC 重啟風暴永遠開不了埠，
+# 杜絕 is-active 在重啟循環瞬間 active 的競態誤判
+wait_port() {
+  local tries="$1" i
+  for ((i = 0; i < tries; i++)); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1; then
       return 0
     fi
-    opts="$(findmnt -T "${p}" -no OPTIONS 2>/dev/null || true)"
-    warn "無法執行 ${p}（掛載選項：${opts:-未知}；可能為 noexec 或 SELinux/AppArmor 限制），嘗試下一個安裝位置…"
-    rm -f "${p}"
+    sleep 1
   done
   return 1
 }
 
+start_unit() {
+  systemctl daemon-reload
+  systemctl enable "${SERVICE}" >/dev/null 2>&1
+  systemctl reset-failed "${SERVICE}" >/dev/null 2>&1 || true
+  systemctl start "${SERVICE}"
+}
+
+stop_unit() {
+  systemctl stop "${SERVICE}" >/dev/null 2>&1 || true
+  systemctl reset-failed "${SERVICE}" >/dev/null 2>&1 || true
+}
+
 main_install() {
+  local p installed=""
+
   install_deps
 
   if ! try_release; then
@@ -217,29 +255,65 @@ main_install() {
 
   # 停止既有服務（含失敗重啟循環），避免換檔與自動重啟互搶
   log "停止既有服務（若存在）…"
-  systemctl stop "${SERVICE}" >/dev/null 2>&1 || true
-  systemctl reset-failed "${SERVICE}" >/dev/null 2>&1 || true
+  stop_unit
 
-  install_bin || die "所有候選位置皆無法執行程式（候選：${BIN_CANDIDATES}）。可用 TD_BIN_CANDIDATES=/其他/路徑/token-devastator 指定位置後重試。"
-
-  write_unit
-  systemctl daemon-reload
-  systemctl enable "${SERVICE}" >/dev/null 2>&1
-  systemctl start "${SERVICE}"
-
-  # 健康檢查（最多 15 秒）
-  log "等待服務就緒…"
-  local i
-  for i in $(seq 1 15); do
-    if curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1; then
+  # 候選位置逐一：安裝 → 服務使用者 exec 自檢 → systemd 啟動＋HTTP 實測驗證
+  IFS=':' read -ra _cands <<< "${BIN_CANDIDATES}"
+  for p in "${_cands[@]}"; do
+    mkdir -p "$(dirname "${p}")" 2>/dev/null || true
+    if ! install -m 0755 "${TMP_DIR}/token-devastator" "${p}" 2>/dev/null; then
+      warn "無法寫入 ${p}，嘗試下一個安裝位置…"
+      continue
+    fi
+    if ! exec_as_service_user "${p}"; then
+      warn "服務使用者（${USER_NAME}）無法執行 ${p}，嘗試下一個安裝位置…"
+      path_diag "${p}"
+      rm -f "${p}"
+      continue
+    fi
+    BIN_PATH="${p}"
+    write_unit
+    start_unit
+    if wait_port 10; then
+      installed="${p}"
       break
     fi
-    sleep 1
-    [[ ${i} -eq 15 ]] && {
-      journalctl -u "${SERVICE}" -n 20 --no-pager || true
-      die "服務未能就緒（埠 ${PORT}），請檢查上方日誌。"
-    }
+    warn "服務於 ${p} 啟動後無法應答（埠 ${PORT}），嘗試下一個安裝位置…"
+    journalctl -u "${SERVICE}" -n 3 --no-pager 2>/dev/null | sed 's/^/  /' || true
+    stop_unit
+    rm -f "${p}"
   done
+
+  # 最後手段：相容模式 unit（停用沙箱強化）重試第一個候選
+  if [ -z "${installed}" ]; then
+    warn "候選位置全數失敗，改以相容模式（停用沙箱強化）重試…"
+    p="${_cands[0]}"
+    mkdir -p "$(dirname "${p}")" 2>/dev/null || true
+    if install -m 0755 "${TMP_DIR}/token-devastator" "${p}" 2>/dev/null \
+      && exec_as_service_user "${p}"; then
+      BIN_PATH="${p}"
+      write_unit compat
+      start_unit
+      if wait_port 10; then
+        installed="${p}"
+        warn "已以相容模式啟動（停用 ProtectSystem／NoNewPrivileges 等沙箱強化）。"
+      else
+        journalctl -u "${SERVICE}" -n 10 --no-pager 2>/dev/null | sed 's/^/  /' || true
+        stop_unit
+        rm -f "${p}"
+      fi
+    fi
+  fi
+
+  if [ -z "${installed}" ]; then
+    echo "診斷資訊（各候選路徑逐級權限）："
+    for p in "${_cands[@]}"; do path_diag "${p}"; done
+    command -v getenforce >/dev/null 2>&1 && getenforce || true
+    die "所有候選位置皆無法以服務使用者執行程式（候選：${BIN_CANDIDATES}）。可用 TD_BIN_CANDIDATES=/其他/路徑/token-devastator 指定位置後重試。"
+  fi
+  if [ "${installed}" != "/usr/local/bin/token-devastator" ]; then
+    warn "已安裝至備援位置 ${installed}"
+  fi
 
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')" || ip=""
